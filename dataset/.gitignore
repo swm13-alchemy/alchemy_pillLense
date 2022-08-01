@@ -1,0 +1,7 @@
+# Folders
+node_modules
+dummy
+output
+
+# JSON
+package-lock.json

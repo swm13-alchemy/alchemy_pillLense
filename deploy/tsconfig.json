@@ -1,0 +1,31 @@
+{
+  "extends": "./tsconfig.paths.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "moduleResolution": "node",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "removeComments": true,
+    "sourceMap": true,
+    "target": "ES6",
+    "esModuleInterop": true,
+    "module": "CommonJS",
+    "outDir": "lib",
+  },
+  "include": [
+    "src/**/*.ts",
+    "serverless.ts",
+    "serverless.base.ts",
+    "serverless.deploy.ts",
+  ],
+  "exclude": [
+    "node_modules/**/*",
+    ".serverless/**/*",
+    ".webpack/**/*",
+    "_warmup/**/*",
+    ".vscode/**/*"
+  ],
+  "ts-node": {
+    "require": ["tsconfig-paths/register"]
+  }
+}
