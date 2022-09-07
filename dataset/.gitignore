@@ -5,3 +5,6 @@ output
 
 # JSON
 package-lock.json
+
+# JS
+test.js
