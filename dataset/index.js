@@ -5,378 +5,327 @@ const { useAxios } = require('./hook');
 const fakeUA = require('fake-useragent');
 const cheerio = require('cheerio');
 const url = require('url');
+const readline = require('readline');
 
 const { browseJSON, saveListAsJSON, generateRandomString } = require('./functions');
 const { getPillData } = require('./services/pillyze');
 puppeteer.use(StealthPlugin());
 // console.clear();
 
-const refineDataFromPillData = async () => {
-    const start = 16001;
-    const end = 18000;
-    const fileName = `refinedProductData_(${start}_${end}).json`;
-
-    const fileList = fs.readdirSync('./output/pillyze/products');
-    fileList.sort((a, b) => a - b);
-
-    const result = [];
-    const errList = [];
-
-    let startIdx = 32;
-
-    for (let i = startIdx; i < startIdx + 4; ++i) {
-        if (fileList[i] == undefined) break;
-
-        const jsonPath = `./output/pillyze/products/${fileList[i]}`;
-
-        const rawList = browseJSON(jsonPath);
-
-        console.log(jsonPath);
-
-        for (let j = 0; j < rawList.length; ++j) {
-            let data;
-            try {
-                data = await getPillDataFromHTML(rawList[j]);
-            } catch (e) {
-                errList.push({
-                    fileIdx: i,
-                    recordIdx: j,
-                });
-            }
-
-            result.push(data);
-            console.log(`${i + 1} 번째 파일 :: ${j + 1} / ${rawList.length}`);
-        }
-
-        console.log(`${i + 1} / ${startIdx + 4}`);
-    }
-
-    saveListAsJSON(`./data/pillyze/product/${fileName}`, result);
-    saveListAsJSON(`./errorList_${fileName}.json`, errList);
-};
-
-const saveSetAsJson = (path, targetSet) => {
-    const saveList = [];
-
-    targetSet.forEach(e => {
-        if (!e) return;
-        saveList.push(e);
-    });
-
-    saveListAsJSON(path, saveList);
-};
-
-const extractMetaDataList = () => {
-    console.log(`Browsing List...`);
-    const totalList = browseJSON('./data/pillyze/product/totalProductList.json');
-
-    console.log(`total :: ${totalList.length} items!`);
-
-    console.log('----------- DUMMY -----------');
-
-    console.log(totalList[0]);
-
-    console.log('-----------  END  -----------');
-
-    console.log('Processing.....');
-
-    // Prepare Set for UNIQUE Keys
-    const makerSet = new Set();
-    const mainFuncSet = new Set();
-    const subFuncSet = new Set();
-    const eatingTimingSet = new Set();
-    const eatingCountSet = new Set();
-    const nutritionSet = new Set();
-
-    totalList.forEach((e, i) => {
-        const { maker, eatingTiming, eatingCount, functions, nutritions } = e;
-
-        // Maker 처리
-        makerSet.add(maker.trim());
-
-        // Meta-data 처리
-        eatingTimingSet.add(eatingTiming.trim());
-        eatingCountSet.add(eatingCount.trim());
-
-        // Function 처리
-        functions.forEach(row => {
-            const isMain = row['type'] === 'main';
-            const targetSet = isMain ? mainFuncSet : subFuncSet;
-
-            const contents = row['contents'];
-
-            contents.forEach(cnts => targetSet.add(cnts.trim()));
-        });
-
-        // Nutrition 처리
-        nutritions.forEach(nutData => {
-            const { nutName, nutAmount } = nutData;
-
-            nutritionSet.add(nutName);
-        });
-    });
-
-    console.log('----------- RESULT -----------');
-    console.log({
-        makerCnt: makerSet.size,
-        mainFuncCnt: mainFuncSet.size,
-        subFuncCnt: subFuncSet.size,
-        eatingTimingCnt: eatingTimingSet.size,
-        eatingCountCnt: eatingCountSet.size,
-        nutritionCnt: nutritionSet.size,
-    });
-    console.log('----------- RESULT -----------');
-
-    const BASEDIR = './data/beeHealer';
-    saveSetAsJson(`${BASEDIR}/nutritionList.json`, nutritionSet);
-    // saveSetAsJson(`${BASEDIR}/makerList.json`, makerSet);
-    // saveSetAsJson(`${BASEDIR}/mainFuncList.json`, mainFuncSet);
-    // saveSetAsJson(`${BASEDIR}/subFuncList.json`, subFuncSet);
-    // saveSetAsJson(`${BASEDIR}/eatingTimingList.json`, eatingTimingSet);
-    // saveSetAsJson(`${BASEDIR}/eatingCountList.json`, eatingCountSet);
-
-    console.log('----------- COMPLETED -----------');
-};
-
-const MAX_NUTRITION_COUNT = 1129;
-
-const crawlNutData = async () => {
-    const result = [];
-
-    const browser = await puppeteer.launch({
-        headless: false,
-    });
-
-    const newPage = await browser.newPage();
-
-    for (let i = 501; i <= 500; ++i) {
-        const ENDPOINT = `https://www.pillyze.com/nutrients/${i}/_`;
-
-        await newPage.waitForTimeout(500);
-
-        await newPage.goto(ENDPOINT);
-
-        const selector = '#amzn-captcha-verify-button';
-        const isReCapCha = await newPage.$eval(selector, () => true).catch(() => false);
-
-        if (isReCapCha) await newPage.waitForTimeout(10000);
-
-        console.log(`${i} processing`);
-
-        const content = await newPage.content();
-
-        result.push(content);
-    }
-
-    saveListAsJSON('./output/pillyze/nutrition/nutritions(501_999).json', result);
-};
-
-const getRowType = str => {
-    let elemType = false;
-
-    if (str === 'title-wrap txt1') elemType = 'name';
-    if (str.includes('tag-wrap')) elemType = 'subName';
-    if (str.includes('caution-wrap')) elemType = 'sideEffect';
-    if (str.includes('p-intake-guide')) elemType = 'intake';
-    if (str.includes('effect-info-wrap')) elemType = 'effect';
-
-    return elemType;
-};
-
-const refineNutDataFromRawHTML = $ => {
-    const SECTION_SELECTOR =
-        'body > div > div.all-wrap-in.all-wrap-in-040 > div.new-wide-wrap.new-wide-wrap-040 > div.new-wide-main > div.new-wide-main-in';
-
-    let result2 = {
-        name: '비타민A',
-        description: [
-            ' 체내 세포가 건강하게 성장하게 해줘요, 세포의 성장과 재생이 활발한 피부와 점막을 건강하게 유지하는데 중요해요.',
-            '눈에서 빛을 흡수하는 세포를 만드는데 필요해요.',
-        ],
-        subName: [
-            '레티노이드',
-            '레티놀',
-            '레티닐팔미테이트',
-            '레티닐아세테이트',
-            '베타카로틴',
-            '알파카로틴',
-            '감마카로틴',
-        ],
-        intake: {
-            min: 210,
-            max: 300,
-            detail: '~~',
-        },
-        sideEffect: ['장기간 고용량 복용시 흡연자 폐암 위험 증가', '과다 복용시 기형 위험 증가'],
-        effect: {
-            lack: '피부와 눈이 쉽게 건조해질 수 있어요. 어두운 곳에서 앞이 잘 보이지 않을 수 있어요.',
-            over: '피부가 건조해지거나 염증이 생기고 탈모가 나타날 수 있어요. 구토와 복통, 두통이 생기기도 해요. 지방간 같은 간 손상이 나타날 수도 있어요. 특히 임신중이라면 태아의 기형을 유발할 수 있으니 반드시 주의하세요.',
-        },
-    };
-
-    const result = {};
-
-    $(SECTION_SELECTOR)
-        .children()
-        .each((i, e) => {
-            const attrType = [];
-            $('> div', e).each((id, { attribs, type }) => {
-                attrType.push(attribs?.class);
-            });
-
-            const rowType = getRowType(attrType.join(' '));
-
-            if (rowType === false) return;
-
-            if (rowType === 'name') {
-                const name = $('> div.title-wrap > span.title', e).text();
-                const desc = $('> div.txt1', e)
-                    .text()
-                    .trim()
-                    .replace(/(\r?)\n/g, '')
-                    .split('·')
-                    .filter(e => e)
-                    .map(e => e.trim());
-
-                result[rowType] = name;
-                result['description'] = desc;
-            }
-
-            if (rowType === 'subName') {
-                const subName = [];
-
-                $('> div.tag-wrap', e)
-                    .children('div.tag')
-                    .each((i, sub) => {
-                        subName.push($(sub).text());
-                    });
-
-                result[rowType] = subName;
-            }
-
-            if (rowType === 'intake') {
-                const intake = {
-                    min: '',
-                    max: '',
-                    detail: '',
-                };
-
-                const min = $('#lab-min > span.txt').text();
-                const max = $('#lab-max > span.txt').text();
-                const detail = [$('> div.txt2', e).text(), $('> div.txt3', e).text()];
-
-                intake['min'] = min;
-                intake['max'] = max;
-                intake['detail'] = detail;
-
-                result[rowType] = intake;
-            }
-
-            if (rowType === 'sideEffect') {
-                const sideEffect = [];
-
-                $('> div.caution-wrap > div.caution', e).each((i, caution) => {
-                    sideEffect.push($(caution).text().trim());
-                });
-
-                result[rowType] = sideEffect;
-            }
-
-            if (rowType === 'effect') {
-                const effect = {
-                    lack: '',
-                    over: '',
-                };
-
-                const over = $('> div.effect-info-wrap > div:nth-child(1) > div.content', e).text();
-                const lack = $('> div.effect-info-wrap > div:nth-child(2) > div.content', e).text();
-
-                effect['lack'] = lack;
-                effect['over'] = over;
-
-                result[rowType] = effect;
-            }
-        });
-
-    return result;
-};
-
-const getMatchedNutritionData = () => {
-    const targetDB = browseJSON('./data/beeHealer/DB/nutDB.json');
-    const newList = browseJSON('./data/pillyze/nutrition/nutList.json');
+const fn = () => {
+    /**
+     * @type []
+     */
+    const nutListPillyze = browseJSON('./data/pillyze/nutrition/nutList(final).json');
+
+    /**
+     * @type []
+     */
+    const nutListAimee = browseJSON('./data/aimee/nutList.json');
+
+    /**
+     * @type []
+     */
+    const productPillyze = browseJSON('./data/beeHealer/nutritionList.json');
 
     const matched = [];
-    const missed = [];
-    const missed_plz = [];
+    const matchedData = [];
+    const unMatched = [];
 
-    newList.forEach(e => {
-        const { name, idx } = e;
-        const isMatched = targetDB.some(e => e.name === name);
-
-        if (name == null) return;
-
-        if (isMatched) matched.push(e);
-        else missed.push(e);
+    nutListPillyze.forEach(e => {
+        if (productPillyze.includes(e.name)) {
+            matched.push(e.name);
+            matchedData.push(e);
+        } else unMatched.push(e.name);
     });
 
-    newList.forEach(({ name }) => {
-        const isMatched = matched.some(e => e.name === name);
+    const includesAimee = [];
 
-        if (!isMatched) missed_plz.push(name);
+    matched.forEach(e => {
+        if (
+            nutListAimee.find(
+                item => item['mainNutrientNm'] === e || item['formalNutrientNm'] === e || item['functionNm'] === e
+            )
+        )
+            includesAimee.push(e);
     });
 
-    console.log({
-        matched: matched.length,
-        missed: missed.length,
-        missed_plz: missed_plz.length,
+    saveListAsJSON('./matchedAimee.json', includesAimee);
+    saveListAsJSON('./matched.json', matchedData);
+    saveListAsJSON('./unused.json', unMatched);
+
+    console.log({ used: matched.length, unused: unMatched.length, matchedAimee: includesAimee.length });
+};
+
+const fn1 = () => {
+    const vst = new Set();
+
+    const matched = browseJSON('./matched.json');
+
+    const uniq = [];
+    const doub = [];
+
+    matched.forEach(e => {
+        if (vst.has(e.name)) return;
+
+        const count = matched.filter(it => it.name === e.name);
+
+        if (count.length > 1) doub.push({ name: e.name, count: count.length });
+
+        uniq.push(e);
+
+        vst.add(e.name);
     });
 
-    saveListAsJSON('./matched.json', matched);
-    saveListAsJSON('./missed.json', missed);
-    saveListAsJSON('./missed_plz.json', missed_plz);
+    saveListAsJSON('./doub.json', doub);
+    saveListAsJSON('./uniq.json', uniq);
+};
+
+const fn3 = () => {
+    const _new = browseJSON('./result.json');
+
+    const _al = _new.slice(0, 72);
+    const _no = _new.slice(72);
+
+    const _ret = _no.map((e, i) => {
+        return {
+            ...e,
+            idx: 300 + i + 1,
+        };
+    });
+
+    const result = [..._al, ..._ret];
+
+    saveListAsJSON('./result2.json', result);
+};
+
+const fn4 = () => {
+    const _nutrient = browseJSON('./done.json');
+
+    const db_nutrient = [];
+    const db_intake = [];
+
+    _nutrient.forEach((e, i) => {
+        const { name, intake, effect, subName, idx } = e;
+
+        db_nutrient.push({
+            id: parseInt(idx),
+            name: name,
+            tips: intake?.detail ?? [],
+            unit: '',
+            sub_names: subName ?? [],
+            lack_info: effect?.lack ?? '',
+            over_info: effect?.over ?? '',
+        });
+
+        // db_intake.push({
+        //     id: i + 1,
+        //     nutrient_id: parseInt(idx),
+        //     min_age: 0,
+        //     max_age: 0,
+        //     is_male: 0,
+        //     req_min: intake?.min ?? 0,
+        //     req_max: intake?.max ?? 0,
+        //     req_avg: 0,
+        // });
+    });
+
+    saveListAsJSON('./db_nutrient.json', db_nutrient);
+    // saveListAsJSON('./db_intake.json', db_intake);
+};
+
+/**
+ * Topic이랑 Nutrition 관련 Table에 맞추어 데이터를 가공하는 코드
+ */
+const dbMaker_nutrition = () => {
+    const topics = browseJSON('./data/beeHealer/topic_new.json');
+    const nutrient = browseJSON('./data/beeHealer/DB/db_nutrient_new.json');
+
+    const db_topics = [];
+    const db_funcs = [];
+    const db_nut_eff = [];
+
+    topics.forEach((tp, idx) => {
+        const { topicName, functions, related } = tp;
+
+        const tp_id = idx + 1;
+
+        db_topics.push({
+            id: tp_id,
+            name: topicName,
+        });
+
+        if (!functions) {
+            // topic이 곧 효능
+            const fn_id = db_funcs.length + 1;
+
+            db_funcs.push({
+                id: fn_id,
+                name: topicName,
+                topic_id: tp_id,
+            });
+
+            related.forEach(nut => {
+                const nutr_id = nutrient.find(e => e.name === nut).id;
+                const db_nut_eff_id = db_nut_eff.length + 1;
+
+                db_nut_eff.push({
+                    id: db_nut_eff_id,
+                    nutrient_id: nutr_id,
+                    efficacy_id: fn_id,
+                });
+            });
+        } else {
+            // functions 들이 효능
+
+            functions.forEach(fnc => {
+                const fn_name = fnc.funcName;
+                const fn_id = db_funcs.length + 1;
+
+                db_funcs.push({
+                    id: fn_id,
+                    name: fn_name,
+                    topic_id: tp_id,
+                });
+
+                fnc.related.forEach(nut => {
+                    const nutr_id = nutrient.find(e => e.name === nut).id;
+                    const db_nut_eff_id = db_nut_eff.length + 1;
+
+                    db_nut_eff.push({
+                        id: db_nut_eff_id,
+                        nutrient_id: nutr_id,
+                        efficacy_id: fn_id,
+                    });
+                });
+            });
+        }
+    });
+
+    saveListAsJSON('./db_topics.json', db_topics);
+    saveListAsJSON('./db_funcs.json', db_funcs);
+    saveListAsJSON('./db_nut_eff.json', db_nut_eff);
+};
+
+const maker_extractor = () => {
+    const totalPillList = browseJSON('./data/pillyze/product/totalProductList.json');
+
+    const db_pill = [];
+    const db_ingredient = [];
+
+    const maker = [
+        {
+            makerName: '제조사명 없음',
+            pillName: ['', '', '', '', '', ''],
+        },
+    ];
+
+    totalPillList.forEach(pill => {
+        let isFound = maker.findIndex(e => e?.makerName === pill.maker);
+
+        if (pill.maker === '') isFound = 0;
+
+        if (isFound !== -1) maker[isFound].pillName.push(pill.title);
+        else maker.push({ makerName: pill.maker, pillName: [pill.title] });
+    });
+
+    saveListAsJSON('./maker.json', maker);
+};
+
+const assignPillID = () => {
+    const makers = browseJSON('./db_maker.json').slice(1);
+
+    const totalPillList = browseJSON('./data/beeHealer/DB/product/db_pilldata_raw.json');
+
+    const result = [];
+
+    makers.forEach((el, row_idx) => {
+        const { pillName, makerName } = el;
+
+        const maker_id = `${row_idx + 1}`.padStart(4, '0');
+
+        pillName.forEach((pill, p_id) => {
+            const pill_id = `${p_id + 1}`.padStart(4, '0');
+
+            result.push({
+                id: `1${maker_id}${pill_id}`,
+                name: pill,
+                maker: makerName,
+            });
+        });
+    });
+
+    saveListAsJSON('./db_pill.json', result);
+};
+
+const makepillData = () => {
+    const pills = browseJSON('./db_pill.json');
+
+    const totalPillList = browseJSON('./data/beeHealer/DB/product/db_pilldata_raw.json');
+    const nutDB = browseJSON('./data/beeHealer/DB/new/db_nutrient_new.json');
+
+    const new_pill = [];
+    const ingDB = [];
+    const err = [];
+
+    pills.forEach((pill, i) => {
+        const { id, name, maker } = pill;
+
+        const pillData = totalPillList.find(e => e.title === name);
+
+        new_pill.push({
+            id: id,
+            name: name,
+            information: pillData?.eatingTip ?? '',
+            maker: maker,
+            daily_dose: pillData?.eatingCount ?? '',
+            intake_timing: pillData?.eatingTiming ?? '',
+            serving_size: null,
+            capsules: null,
+        });
+
+        const { nutritions } = pillData;
+
+        nutritions.forEach(ing => {
+            const { nutName: _name, nutAmount: _amnt } = ing;
+
+            const ingData = nutDB.find(e => e.name === _name);
+
+            const nutrient_id = ingData ? ingData.id : null;
+
+            const matchValue = str => str.match(/\d*(\.?\d*)/g).filter(e => e)[0];
+
+            const content = matchValue(_amnt);
+            const unit = _amnt.replace(content, '');
+
+            ingDB.push({
+                pill_id: id,
+                nutrient_id: nutrient_id,
+                content: content,
+                unit: unit,
+            });
+        });
+    });
+
+    // saveListAsJSON('./db_pill_extra.json', new_pill);
+    saveListAsJSON('./ingDB.json', ingDB);
+    // saveListAsJSON('./err.json', err);
+
+    // totalPillList.forEach((pill, idx) => {
+    //     const {
+    //         title: name,
+    //         maker,
+    //         eatingTiming: intake_timing,
+    //         eatingCount: daily_dose,
+    //         eatingTip: information,
+    //         nutritions
+    //     } = pill;
+    //     const pill_id = idx + 1;
+    //     db_pill.push({
+    //     })
+    // });
 };
 
 (async () => {
-    getMatchedNutritionData();
-
-    return;
-
-    const totalPillyze = browseJSON('./data/pillyze/product/totalProductList.json');
-    const newList = browseJSON('./data/pillyze/nutrition/nutList.json');
-
-    const nutSet = new Set();
-    const matched = [];
-    const missed = [];
-
-    totalPillyze.forEach(nut => {
-        const { nutritions } = nut;
-
-        nutritions.forEach(data => {
-            const { nutName } = data;
-            nutSet.add(nutName);
-        });
-    });
-
-    console.log({ size: nutSet.size });
-
-    const nutSet_r = [];
-    nutSet.forEach(e => nutSet_r.push(e));
-
-    newList.forEach(e => {
-        const { name } = e;
-        if (!name) return;
-
-        const isMatched = nutSet_r.some(e => e === name);
-
-        if (isMatched) matched.push(name);
-        else missed.push(name);
-    });
-
-    console.log({
-        matched: matched.length,
-        missed: missed.length,
-    });
-
-    saveListAsJSON('./matched_r.json', matched);
-    saveListAsJSON('./missed_r.json', missed);
+    makepillData();
 })();
